@@ -1,4 +1,4 @@
-"""Capacited Vehicles Routing Problem (CVRP)."""
+"""Capacited Vehicles Routing Problem (CVRP) using an Ant Colony Algorithm (ACO)."""
 
 from __future__ import print_function
 
@@ -183,9 +183,10 @@ def solve_using_google():
 
 class Pheromone_Trails:
     def __init__(self, no_cities):
+        from random import uniform
         self.pheromones_matrix = []
         for distances in range(no_cities):
-            pheromones = [0 for _ in range(no_cities)]
+            pheromones = [uniform(0, 0.1) for _ in range(no_cities)]
             self.pheromones_matrix.append(pheromones)
 
     def get_pheromone_trail(self, city_i, city_j):
