@@ -2,11 +2,13 @@
 
 from __future__ import print_function
 
+import random
+
 import numpy as np
 from ortools.constraint_solver import pywrapcp
 from ortools.constraint_solver import routing_enums_pb2
 
-ALPHA = 1
+ALPHA = 0.7
 BETHA = 1
 Q = 1
 RHO = 0.1
@@ -52,7 +54,7 @@ class Coords:
                     continue
 
                 if reading_coords:
-                    self.coords.append([int(contents[1]), int(contents[2])])
+                    self.coords.append([int(contents[2]), int(contents[3])])
 
                 if reading_demand:
                     self.demands.append(int(contents[1]))
@@ -63,21 +65,27 @@ class Coords:
         self.distance_matrix = self._create_distance_matrix()
 
         with open(sol_fn, 'r') as f:
+            self.optimal_routes = []
             for line in f.readlines():
                 contents = line.split(' ')
                 if 'cost' in contents[0].lower():
                     self.cost = int(contents[1])
                     break
+                elif 'route' in contents[0].lower():
+                    route = []
+                    for i in range(2, len(contents)):
+                        el = contents[i].strip()
+                        if el == '':
+                            break
+                        route.append(int(el))
+                    self.optimal_routes.append(route)
 
     def _create_distance_matrix(self):
         distances_m = []
         for i_coord in self.coords:
             distances = []
             for j_coord in self.coords:
-                # distance = np.linalg.norm(np.subtract(i_coord, j_coord))
-                x1, y1 = i_coord
-                x2, y2 = j_coord
-                distance = int(np.sqrt(pow((x1 - x2), 2) + pow((y1 - y2), 2)))
+                distance = int(round(np.linalg.norm(np.subtract(i_coord, j_coord))))
                 distances.append(distance)
             distances_m.append(distances)
         return distances_m
@@ -85,6 +93,7 @@ class Coords:
 
 def create_data_model():
     """Stores the data for the problem."""
+    # TODO olab: put filename here
     coords = Coords()
     data = {}
     data['distance_matrix'] = coords.distance_matrix
@@ -96,6 +105,8 @@ def create_data_model():
 
 
 def get_attractiveness_of_city(distance):
+    if distance == 0:
+        return 0
     return 1 / distance
 
 
@@ -206,8 +217,9 @@ class Pheromone_Trails:
 class Ant:
     def __init__(self, capacity, depot, demands, distance_m, pheromone_trails):
         self.current_city = depot
+        self.depot = depot
         self.distance_m = distance_m
-        self.not_visited = self.create_not_visited(distance_m, depot)
+        self.not_visited = self.create_not_visited(distance_m)
         self.capacity = capacity
         self.load = capacity
         self.demands = demands
@@ -218,10 +230,10 @@ class Ant:
 
         self.start()
 
-    def create_not_visited(self, distance_m, depot):
+    def create_not_visited(self, distance_m):
         nv = set()
         for i, _ in enumerate(distance_m):
-            if i != depot:
+            if i != self.depot:
                 nv.add(i)
         return nv
 
@@ -238,11 +250,10 @@ class Ant:
         self.current_trip.append((index, distance))
 
     def visit_depot(self):
-        depot_index = 0
         self.load = self.capacity
-        distance = self.distance_m[self.current_city][depot_index]
-        self.current_city = depot_index
-        self.current_trip.append((depot_index, distance))
+        distance = self.distance_m[self.current_city][self.depot]
+        self.current_city = self.depot
+        self.current_trip.append((self.depot, distance))
         self.trips.append(self.current_trip)
         self.current_trip = []
 
@@ -288,7 +299,7 @@ class Ant:
 
     def reset(self):
         self.current_city = 0
-        self.not_visited = self.create_not_visited(self.distance_m, 0)
+        self.not_visited = self.create_not_visited(self.distance_m)
         self.current_trip = []
         self.trips = []
         self.load = self.capacity
@@ -300,7 +311,7 @@ def trips_to_str(trips):
     for index, trip in enumerate(trips):
         line = 'Route #' + str(index + 1) + ": "
         for city, _ in trip:
-            if city ==0:
+            if city == 0:
                 break
             line += str(city) + " "
 
@@ -317,7 +328,7 @@ def save(filename, optimal, my_best, routes):
 
 def solve_using_ants():
     no_ants = 100
-    iterations = 15
+    iterations = 150
 
     overall_score = 0
 
@@ -346,10 +357,9 @@ def solve_using_ants():
                     ant.leave_pheromone()
                     ant.reset()
             metric = (best_trip - data.cost) / data.cost
-            print("n", n, "k", k, "optimal", data.cost, " actual", best_trip, 'metric', metric)
+            print("n", n, "k", k, "optimal", data.cost, "actual", best_trip,
+                  'metric', metric)
             save(data.write_fn, data.cost, best_trip, routes)
-            # print(routes)
-            # print('---------------------------------------')
             k_score += metric
         print('k', k, 'k_score', k_score)
         overall_score += k_score
@@ -357,9 +367,8 @@ def solve_using_ants():
 
 
 def main():
-    # solve_using_google()
+    random.seed(1)
     solve_using_ants()
-    # TODO(olab) please write your own impl
 
 
 if __name__ == '__main__':
