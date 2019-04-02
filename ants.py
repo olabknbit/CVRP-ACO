@@ -11,18 +11,19 @@ BETHA = 1
 Q = 1
 RHO = 0.1
 
-nk = {5: [32, 33, 34, 36, 37, 38, 39], 6: [33, 37, 39, 45], 7: [45, 46, 48, 53, 54]}
+nk = {5: [32, 33, 34, 36, 37, 38, 39], 6: [33, 37, 39, 45], 7: [45, 46, 48, 53, 54], 9: [55, 61, 65]}
 
 
 def get_problem_sol_file_pair(n, k):
     problem_fn = 'data/A-VRP/A-n' + str(n) + '-k' + str(k) + '.vrp'
     sol_fn = 'data/A-VRP-sol/opt-A-n' + str(n) + '-k' + str(k)
-    return problem_fn, sol_fn
+    write_fn = 'data/A-VRP-my/latest-A-n' + str(n) + '-k' + str(k)
+    return problem_fn, sol_fn, write_fn
 
 
 class Coords:
     def __init__(self, filenames):
-        problem_fn, sol_fn = filenames
+        problem_fn, sol_fn, self.write_fn = filenames
         self.capacities = []
         reading_coords = False
         reading_demand = False
@@ -73,7 +74,10 @@ class Coords:
         for i_coord in self.coords:
             distances = []
             for j_coord in self.coords:
-                distance = np.linalg.norm(np.subtract(i_coord, j_coord))
+                # distance = np.linalg.norm(np.subtract(i_coord, j_coord))
+                x1, y1 = i_coord
+                x2, y2 = j_coord
+                distance = int(np.sqrt(pow((x1 - x2), 2) + pow((y1 - y2), 2)))
                 distances.append(distance)
             distances_m.append(distances)
         return distances_m
@@ -194,7 +198,6 @@ class Pheromone_Trails:
 
     def update(self, city_i, city_j, overall_trip_distance):
         delta_tau = Q / overall_trip_distance
-        # print('pop', self.pheromones_matrix[city_i][city_j])
         self.pheromones_matrix[city_i][city_j] *= delta_tau
         self.pheromones_matrix[city_j][city_i] *= delta_tau
 
@@ -245,6 +248,9 @@ class Ant:
     def calc_val(self, nv_i):
         pheromone_val = self.pheromone_trails.get_pheromone_trail(self.current_city, nv_i)
         attractiveness = get_attractiveness_of_city(self.distance_m[self.current_city][nv_i])
+        if self.current_city == nv_i:
+            print(self.current_city, nv_i)
+            exit(1)
         return pow(pheromone_val, ALPHA) * pow(attractiveness, BETHA)
 
     def create_path(self):
@@ -261,6 +267,7 @@ class Ant:
                     self.visit_depot()
                 else:
                     self.visit_city(next_to_visit)
+        self.visit_depot()
 
     def calculate_paths_quality(self):
         overall_distance = 0
@@ -289,13 +296,22 @@ class Ant:
 
 def trips_to_str(trips):
     s = ''
-    for trip in trips:
-        line = '0'
-        for city, distance in trip:
-            line += ' -> ' + str(city)
+    for index, trip in enumerate(trips):
+        line = 'Route #' + str(index + 1) + ": "
+        for city, _ in trip:
+            if city ==0:
+                break
+            line += str(city) + " "
 
         s += line + '\n'
     return s
+
+
+def save(filename, optimal, my_best, routes):
+    with open(filename, 'w')as f:
+        f.write(routes)
+        f.write("my_best: " + str(my_best) + '\n')
+        f.write("optimal: " + str(optimal))
 
 
 def solve_using_ants():
@@ -315,29 +331,28 @@ def solve_using_ants():
                         distance_m=data.distance_matrix, pheromone_trails=pheromone_trails) for _ in range(no_ants)]
             import sys
             best_trip = sys.maxsize
-            best_trip_str = ''
+            routes = ''
             for iteration in range(iterations):
                 for ant in ants:
                     ant.create_path()
                     ant.calculate_paths_quality()
                     if ant.trips_distance < best_trip:
                         best_trip = ant.trips_distance
-                        best_trip_str = trips_to_str(ant.trips)
+                        routes = trips_to_str(ant.trips)
 
                 for ant in ants:
                     pheromone_trails.evaporate()
                     ant.leave_pheromone()
                     ant.reset()
-            metric = ((best_trip - data.cost) / data.cost) * 100
-            metric_str = str(((best_trip - data.cost) / data.cost) * 100) + '%'
-            print("n", n, "k", k, "optimal", data.cost, " actual", best_trip, 'metric', metric_str)
-            # print(best_trip_str)
+            metric = (best_trip - data.cost) / data.cost
+            print("n", n, "k", k, "optimal", data.cost, " actual", best_trip, 'metric', metric)
+            save(data.write_fn, data.cost, best_trip, routes)
+            # print(routes)
             # print('---------------------------------------')
             k_score += metric
         print('k', k, 'k_score', k_score)
         overall_score += k_score
     print('overall_score', overall_score)
-
 
 
 def main():
