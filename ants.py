@@ -23,17 +23,45 @@ def get_problem_sol_file_pair(n, k):
     return problem_fn, sol_fn, write_fn
 
 
+class Config:
+    def __init__(self):
+        self.iterations = 0
+        self.ants = 0
+        self.k = 0
+
+        self._read_config_f()
+
+    def _read_config_f(self):
+        with open('data/config', 'r') as f:
+            for line in f.readlines():
+                contents = line.split(' ')
+                if contents[0] == 'iterations':
+                    self.iterations = int(contents[2])
+                if contents[0] == 'ants':
+                    self.ants = int(contents[2])
+                if contents[0] == 'k':
+                    self.k = int(contents[2])
+
+
 class Coords:
     def __init__(self, filenames):
         problem_fn, sol_fn, self.write_fn = filenames
         self.capacities = []
-        reading_coords = False
-        reading_demand = False
-        reading_depot = False
         self.no_trucks = 5
         self.coords = []
         self.demands = []
         self.depot = None
+
+        self._read_problem_f(problem_fn)
+
+        self.distance_matrix = self._create_distance_matrix()
+
+        self._read_sol_f(sol_fn)
+
+    def _read_problem_f(self, problem_fn):
+        reading_coords = False
+        reading_demand = False
+        reading_depot = False
         with open(problem_fn, 'r') as f:
             for line in f.readlines():
                 contents = line.split(' ')
@@ -62,8 +90,8 @@ class Coords:
                 if reading_depot:
                     self.depot = int(contents[1]) - 1
                     break
-        self.distance_matrix = self._create_distance_matrix()
 
+    def _read_sol_f(self, sol_fn):
         with open(sol_fn, 'r') as f:
             self.optimal_routes = []
             for line in f.readlines():
@@ -102,12 +130,6 @@ def create_data_model():
     data['num_vehicles'] = coords.no_trucks
     data['depot'] = coords.depot
     return data
-
-
-def get_attractiveness_of_city(distance):
-    if distance == 0:
-        return 0
-    return 1 / distance
 
 
 def print_solution(data, manager, routing, assignment):
@@ -204,14 +226,12 @@ class Pheromone_Trails:
         return self.pheromones_matrix[city_i][city_j]
 
     def evaporate(self):
-        for i in range(len(self.pheromones_matrix)):
-            for j in range(len(self.pheromones_matrix[0])):
-                self.pheromones_matrix[i][j] *= (1 - RHO)
+        self.pheromones_matrix = np.multiply(self.pheromones_matrix, (1 - RHO))
 
     def update(self, city_i, city_j, overall_trip_distance):
         delta_tau = Q / overall_trip_distance
-        self.pheromones_matrix[city_i][city_j] *= delta_tau
-        self.pheromones_matrix[city_j][city_i] *= delta_tau
+        self.pheromones_matrix[city_i][city_j] += delta_tau
+        self.pheromones_matrix[city_j][city_i] += delta_tau
 
 
 class Ant:
@@ -257,28 +277,46 @@ class Ant:
         self.trips.append(self.current_trip)
         self.current_trip = []
 
-    def calc_val(self, nv_i):
-        pheromone_val = self.pheromone_trails.get_pheromone_trail(self.current_city, nv_i)
-        attractiveness = get_attractiveness_of_city(self.distance_m[self.current_city][nv_i])
-        if self.current_city == nv_i:
-            print(self.current_city, nv_i)
-            exit(1)
-        return pow(pheromone_val, ALPHA) * pow(attractiveness, BETHA)
+    def get_intensity(self, city):
+        return self.pheromone_trails.get_pheromone_trail(self.current_city, city)
+
+    def get_visibility(self, city):
+        distance = self.distance_m[self.current_city][city]
+        if distance == 0:
+            return 1
+        return 1 / distance
+
+    def calc_val(self, city):
+        intensity = self.get_intensity(city)
+        visibility = self.get_visibility(city)
+        return pow(intensity, ALPHA) * pow(visibility, BETHA)
+
+    def get_neighbours_with_probab(self):
+        not_visited = list(self.not_visited)
+
+        l = [self.calc_val(city) for city in not_visited]
+        m = np.divide(l, sum(l))
+
+        for i in range(1, len(m)):
+            m[i] += m[i - 1]
+        return not_visited, m
 
     def create_path(self):
         while len(self.not_visited) > 0:
-            # TODO implement neighbours later
-            neighbours = []
-            if len(neighbours) == 0:
-                nv = list(self.not_visited)
-                nv_values = [self.calc_val(nv_i) for nv_i in nv]
-                next_to_visit = nv[nv_values.index(max(nv_values))]
+            neighbours, probabilities = self.get_neighbours_with_probab()
+            r = random.random()
+            next_to_visit = neighbours[-1]
+            for i in range(len(probabilities)):
+                if r < probabilities[i]:
+                    next_to_visit = neighbours[i]
+                    break
 
-                if self.demands[next_to_visit] > self.load:
-                    # Come back to the depot to reload
-                    self.visit_depot()
-                else:
-                    self.visit_city(next_to_visit)
+            if self.demands[next_to_visit] > self.load:
+                # Come back to the depot to reload
+                self.visit_depot()
+            else:
+                self.visit_city(next_to_visit)
+
         self.visit_depot()
 
     def calculate_paths_quality(self):
@@ -290,12 +328,11 @@ class Ant:
 
     def leave_pheromone(self):
         for trip in self.trips:
-            prev_city = 0
+            prev_city = self.depot
             for i, (city, _) in enumerate(trip):
-                if i == len(trip) - 1:
-                    break
                 self.pheromone_trails.update(prev_city, city, self.trips_distance)
                 prev_city = city
+            self.pheromone_trails.update(prev_city, self.depot, self.trips_distance)
 
     def reset(self):
         self.current_city = 0
@@ -327,8 +364,9 @@ def save(filename, optimal, my_best, routes):
 
 
 def solve_using_ants():
-    no_ants = 100
-    iterations = 150
+    config = Config()
+    no_ants = config.ants
+    iterations = config.iterations
 
     overall_score = 0
 
@@ -357,13 +395,15 @@ def solve_using_ants():
                     ant.leave_pheromone()
                     ant.reset()
             metric = (best_trip - data.cost) / data.cost
-            print("n", n, "k", k, "optimal", data.cost, "actual", best_trip,
+            print("n", n, "k", k, "optimal", data.cost, "my_best", best_trip,
                   'metric', metric)
             save(data.write_fn, data.cost, best_trip, routes)
             k_score += metric
-        print('k', k, 'k_score', k_score)
+        k_score /= len(ns)
+        print('k', k, 'mean k_score', k_score)
         overall_score += k_score
-    print('overall_score', overall_score)
+    overall_score /= len(nk)
+    print('mean overall_score', overall_score)
 
 
 def main():
