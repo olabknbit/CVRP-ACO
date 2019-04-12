@@ -5,13 +5,9 @@ from __future__ import print_function
 import random
 
 import numpy as np
-from ortools.constraint_solver import pywrapcp
-from ortools.constraint_solver import routing_enums_pb2
 
-ALPHA = 0.7
-BETHA = 1
 Q = 1
-RHO = 0.1
+RHO = 0.2
 
 nk = {5: [32, 33, 34, 36, 37, 38, 39], 6: [33, 37, 39, 45], 7: [45, 46, 48, 53, 54], 9: [55, 61, 65]}
 
@@ -19,7 +15,7 @@ nk = {5: [32, 33, 34, 36, 37, 38, 39], 6: [33, 37, 39, 45], 7: [45, 46, 48, 53, 
 def get_problem_sol_file_pair(n, k):
     problem_fn = 'data/A-VRP/A-n' + str(n) + '-k' + str(k) + '.vrp'
     sol_fn = 'data/A-VRP-sol/opt-A-n' + str(n) + '-k' + str(k)
-    write_fn = 'data/A-VRP-my/latest-A-n' + str(n) + '-k' + str(k)
+    write_fn = 'data/A-VRP-my-alpha/latest-A-n' + str(n) + '-k' + str(k)
     return problem_fn, sol_fn, write_fn
 
 
@@ -28,6 +24,8 @@ class Config:
         self.iterations = 0
         self.ants = 0
         self.k = 0
+        self.alpha = 2.0
+        self.beta = 5.0
 
         self._read_config_f()
 
@@ -41,6 +39,32 @@ class Config:
                     self.ants = int(contents[2])
                 if contents[0] == 'k':
                     self.k = int(contents[2])
+
+    def set_alpha(self, alpha):
+        self.alpha = alpha
+
+    def set_beta(self, beta):
+        self.beta = beta
+
+
+def read_solution_file(path):
+    with open(path, 'r') as f:
+        optimal_routes = []
+        cost = 0
+        for line in f.readlines():
+            contents = line.split(' ')
+            if 'cost' in contents[0].lower() or 'my_best' in contents[0].lower():
+                cost = int(contents[1])
+                break
+            elif 'route' in contents[0].lower():
+                route = []
+                for i in range(2, len(contents)):
+                    el = contents[i].strip()
+                    if el == '':
+                        break
+                    route.append(int(el))
+                optimal_routes.append(route)
+    return optimal_routes, cost
 
 
 class Coords:
@@ -92,21 +116,7 @@ class Coords:
                     break
 
     def _read_sol_f(self, sol_fn):
-        with open(sol_fn, 'r') as f:
-            self.optimal_routes = []
-            for line in f.readlines():
-                contents = line.split(' ')
-                if 'cost' in contents[0].lower():
-                    self.cost = int(contents[1])
-                    break
-                elif 'route' in contents[0].lower():
-                    route = []
-                    for i in range(2, len(contents)):
-                        el = contents[i].strip()
-                        if el == '':
-                            break
-                        route.append(int(el))
-                    self.optimal_routes.append(route)
+        self.optimal_routes, self.cost = read_solution_file(sol_fn)
 
     def _create_distance_matrix(self):
         distances_m = []
@@ -117,101 +127,6 @@ class Coords:
                 distances.append(distance)
             distances_m.append(distances)
         return distances_m
-
-
-def create_data_model():
-    """Stores the data for the problem."""
-    # TODO olab: put filename here
-    coords = Coords()
-    data = {}
-    data['distance_matrix'] = coords.distance_matrix
-    data['demands'] = coords.demands
-    data['vehicle_capacities'] = coords.capacities
-    data['num_vehicles'] = coords.no_trucks
-    data['depot'] = coords.depot
-    return data
-
-
-def print_solution(data, manager, routing, assignment):
-    """Prints assignment on console."""
-    total_distance = 0
-    total_load = 0
-    for vehicle_id in range(data['num_vehicles']):
-        index = routing.Start(vehicle_id)
-        plan_output = 'Route for vehicle {}:\n'.format(vehicle_id)
-        route_distance = 0
-        route_load = 0
-        while not routing.IsEnd(index):
-            node_index = manager.IndexToNode(index)
-            route_load += data['demands'][node_index]
-            plan_output += ' {0} Load({1}) -> '.format(node_index, route_load)
-            previous_index = index
-            index = assignment.Value(routing.NextVar(index))
-            route_distance += routing.GetArcCostForVehicle(
-                previous_index, index, vehicle_id)
-        plan_output += ' {0} Load({1})\n'.format(
-            manager.IndexToNode(index), route_load)
-        plan_output += 'Distance of the route: {}m\n'.format(route_distance)
-        plan_output += 'Load of the route: {}\n'.format(route_load)
-        print(plan_output)
-        total_distance += route_distance
-        total_load += route_load
-    print('Total distance of all routes: {}m'.format(total_distance))
-    print('Total load of all routes: {}'.format(total_load))
-
-
-def solve_using_google():
-    """Solve the CVRP problem."""
-    # Instantiate the data problem.
-    data = create_data_model()
-
-    # Create the routing index manager.
-    manager = pywrapcp.RoutingIndexManager(
-        len(data['distance_matrix']), data['num_vehicles'], data['depot'])
-
-    # Create Routing Model.
-    routing = pywrapcp.RoutingModel(manager)
-
-    # Create and register a transit callback.
-    def distance_callback(from_index, to_index):
-        """Returns the distance between the two nodes."""
-        # Convert from routing variable Index to distance matrix NodeIndex.
-        from_node = manager.IndexToNode(from_index)
-        to_node = manager.IndexToNode(to_index)
-        return data['distance_matrix'][from_node][to_node]
-
-    transit_callback_index = routing.RegisterTransitCallback(distance_callback)
-
-    # Define cost of each arc.
-    routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
-
-    # Add Capacity constraint.
-    def demand_callback(from_index):
-        """Returns the demand of the node."""
-        # Convert from routing variable Index to demands NodeIndex.
-        from_node = manager.IndexToNode(from_index)
-        return data['demands'][from_node]
-
-    demand_callback_index = routing.RegisterUnaryTransitCallback(
-        demand_callback)
-    routing.AddDimensionWithVehicleCapacity(
-        demand_callback_index,
-        0,  # null capacity slack
-        data['vehicle_capacities'],  # vehicle maximum capacities
-        True,  # start cumul to zero
-        'Capacity')
-
-    # Setting first solution heuristic.
-    search_parameters = pywrapcp.DefaultRoutingSearchParameters()
-    search_parameters.first_solution_strategy = (
-        routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC)
-
-    # Solve the problem.
-    assignment = routing.SolveWithParameters(search_parameters)
-
-    # Print solution on console.
-    if assignment:
-        print_solution(data, manager, routing, assignment)
 
 
 class Pheromone_Trails:
@@ -235,7 +150,7 @@ class Pheromone_Trails:
 
 
 class Ant:
-    def __init__(self, capacity, depot, demands, distance_m, pheromone_trails):
+    def __init__(self, capacity, depot, demands, distance_m, pheromone_trails, config):
         self.current_city = depot
         self.depot = depot
         self.distance_m = distance_m
@@ -247,6 +162,7 @@ class Ant:
         self.current_trip = []
         self.pheromone_trails = pheromone_trails
         self.trips_distance = None
+        self.config = config
 
         self.start()
 
@@ -289,7 +205,7 @@ class Ant:
     def calc_val(self, city):
         intensity = self.get_intensity(city)
         visibility = self.get_visibility(city)
-        return pow(intensity, ALPHA) * pow(visibility, BETHA)
+        return pow(intensity, self.config.alpha) * pow(visibility, self.config.beta)
 
     def get_neighbours_with_probab(self):
         not_visited = list(self.not_visited)
@@ -363,6 +279,14 @@ def save(filename, optimal, my_best, routes):
         f.write("optimal: " + str(optimal))
 
 
+def plot_data(xs, ys):
+    import matplotlib.pyplot as plt
+    plt.plot(xs, ys, c='red')
+    plt.xlabel('beta')
+    plt.ylabel('error')
+    plt.savefig('beta1.svg')
+
+
 def solve_using_ants():
     config = Config()
     no_ants = config.ants
@@ -378,10 +302,12 @@ def solve_using_ants():
             no_cities = len(data.distance_matrix)
             pheromone_trails = Pheromone_Trails(no_cities)
             ants = [Ant(capacity=data.capacities[0], depot=data.depot, demands=data.demands,
-                        distance_m=data.distance_matrix, pheromone_trails=pheromone_trails) for _ in range(no_ants)]
+                        distance_m=data.distance_matrix, pheromone_trails=pheromone_trails, config=config) for _ in
+                    range(no_ants)]
             import sys
             best_trip = sys.maxsize
             routes = ''
+            last_record = 100000000
             for iteration in range(iterations):
                 for ant in ants:
                     ant.create_path()
@@ -394,7 +320,12 @@ def solve_using_ants():
                     pheromone_trails.evaporate()
                     ant.leave_pheromone()
                     ant.reset()
-            metric = (best_trip - data.cost) / data.cost
+                metric = (best_trip - data.cost) / data.cost
+                if iteration % 100 == 0:
+                    if abs(last_record - metric) < 0.001:
+                        break
+
+                    last_record = metric
             print("n", n, "k", k, "optimal", data.cost, "my_best", best_trip,
                   'metric', metric)
             save(data.write_fn, data.cost, best_trip, routes)
@@ -406,9 +337,56 @@ def solve_using_ants():
     print('mean overall_score', overall_score)
 
 
+def visualize_graph(coords, routes, title):
+    import networkx as nx
+    import matplotlib.pyplot as plt
+
+    G = nx.Graph()
+
+    for route in routes:
+        last_city = 0
+        for city in route:
+            G.add_edge(last_city, city)
+            last_city = city
+
+        G.add_edge(last_city, 0)
+
+    edgelist = [(u, v) for (u, v, d) in G.edges(data=True)]
+
+    for i, pos in enumerate(coords):
+        G.add_node(i, pos=pos)
+
+    pos = nx.get_node_attributes(G, 'pos')
+
+    # nodes
+    nx.draw_networkx_nodes(G, pos)
+
+    # edges
+    nx.draw_networkx_edges(G, pos, edgelist=edgelist)
+
+    # labels
+    nx.draw_networkx_labels(G, pos, font_size=20, font_family='sans-serif')
+
+    plt.axis('off')
+    plt.title(title)
+    plt.show()
+
+
 def main():
     random.seed(1)
+
     solve_using_ants()
+
+    # Visualize one use case from the dataset
+    n = 32
+    k = 5
+    problem_fn, sol_fn, write_fn = get_problem_sol_file_pair(n, k)
+    data = Coords((problem_fn, sol_fn, write_fn))
+    coords = data.coords
+    optimal_routes = data.optimal_routes
+    my_routes, my_cost = read_solution_file(write_fn)
+    visualize_graph(coords, optimal_routes, 'optimal routes. cost: ' + str(data.cost))
+    visualize_graph(coords, my_routes, 'my routes. cost: ' + str(my_cost))
 
 
 if __name__ == '__main__':
